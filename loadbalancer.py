@@ -31,27 +31,22 @@ def deviceInformation(data):
 	global deviceMAC
 	global hostPorts
 	switchDPID = ""
-	for i in data:
-		print("hello haizz")
-		ipv4_list = i.get('ipv4', [])
-		mac_list = i.get('mac', [])
-
-		if ipv4_list and mac_list:
-			# Proceed with your logic if both lists are non-empty
-			# For example:
-			ip = ipv4_list[0]
-			mac = mac_list[0]
-			deviceMAC[ip] = mac
-			for j in i['attachmentPoint']:
-				for key in j:
-					temp = key.encode('ascii','ignore')
-					if(temp=="switchDPID"):
-						switchDPID = j[key].encode('ascii','ignore')
-						switch[ip] = switchDPID
-					elif(temp=="port"):
-						portNumber = j[key]
-						switchShort = switchDPID.split(":")[7]
-						hostPorts[ip+ "::" + switchShort] = str(portNumber)
+	for j in data.values():
+		for i in j:
+			if(i['ipv4']):
+				ip = i['ipv4'][0].encode('ascii','ignore') # The encode method is unnecessary for strings in Python 3 unless you need to work explicitly with bytes. Strings are already Unicode by default.
+				mac = i['mac'][0].encode('ascii','ignore')
+				deviceMAC[ip] = mac
+				for j in i['attachmentPoint']:
+					for key in j:
+						temp = key.encode('ascii','ignore')
+						if(temp=="switchDPID"):
+							switchDPID = j[key].encode('ascii','ignore')
+							switch[ip] = switchDPID
+						elif(temp=="port"):
+							portNumber = j[key]
+							switchShort = switchDPID.split(":")[7]
+							hostPorts[ip+ "::" + switchShort] = str(portNumber)
 
 # Finding Switch Links Of Common Switch Of H3, H4
 
