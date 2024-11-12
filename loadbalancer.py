@@ -32,6 +32,7 @@ def deviceInformation(data):
 	global hostPorts
 	switchDPID = ""
 	for i in data:
+		print("hello haizz")
 		ipv4_list = i.get('ipv4', [])
 		mac_list = i.get('mac', [])
 
