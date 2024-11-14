@@ -31,7 +31,7 @@ def device_information(data):
                 mac = device['mac'][0]
                 device_mac[ip] = mac
                 for attachment in device['attachmentPoint']:
-                    if 'switchDPID' in attachment:
+                    if 'switch' in attachment:
                         switch_dpid = attachment['switchDPID']
                         switch[ip] = switch_dpid
                     elif 'port' in attachment:
