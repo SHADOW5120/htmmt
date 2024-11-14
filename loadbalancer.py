@@ -2,364 +2,192 @@
 
 import requests
 import json
-import unicodedata
+import networkx as nx
 from subprocess import Popen, PIPE
 import time
-import networkx as nx
-from sys import exit
 
-# Method To Get REST Data In JSON Format
-def getResponse(url,choice):
+# Function to make REST API call and process JSON response based on the choice
+def get_response(url, choice):
+    response = requests.get(url)
+    if response.ok:
+        data = response.json()
+        if choice == "deviceInfo":
+            device_information(data)
+        elif choice == "findSwitchLinks":
+            find_switch_links(data, switch[h2])
+        elif choice == "linkTX":
+            link_tx(data, port_key)
+    else:
+        response.raise_for_status()
 
-	response = requests.get(url)
+# Parse JSON data to find switch connected to a specific device (e.g., H4)
+def device_information(data):
+    global switch, device_mac, host_ports
+    switch_dpid = ""
+    for devices in data.values():
+        for device in devices:
+            if device['ipv4']:
+                ip = device['ipv4'][0]
+                mac = device['mac'][0]
+                device_mac[ip] = mac
+                for attachment in device['attachmentPoint']:
+                    if 'switchDPID' in attachment:
+                        switch_dpid = attachment['switchDPID']
+                        switch[ip] = switch_dpid
+                    elif 'port' in attachment:
+                        port_number = attachment['port']
+                        switch_short = switch_dpid.split(":")[7]
+                        host_ports[f"{ip}::{switch_short}"] = str(port_number)
 
-	if(response.ok):
-		jData = json.loads(response.content) # =response.jon()
-		if(choice=="deviceInfo"):
-			deviceInformation(jData)
-		elif(choice=="findSwitchLinks"):
-			findSwitchLinks(jData,switch[h2])
-		elif(choice=="linkTX"):
-			linkTX(jData,portKey)
+# Find links for a specific switch and update graph for path computation
+def find_switch_links(data, s):
+    global switch_links, link_ports, G
+    links = []
+    for link in data:
+        src, dst = link['src-switch'], link['dst-switch']
+        src_port, dst_port = str(link['src-port']), str(link['dst-port'])
+        src_temp, dst_temp = src.split(":")[7], dst.split(":")[7]
+        G.add_edge(int(src_temp, 16), int(dst_temp, 16))
+        port_src_to_dst, port_dst_to_src = f"{src_port}::{dst_port}", f"{dst_port}::{src_port}"
+        temp_src_to_dst, temp_dst_to_src = f"{src_temp}::{dst_temp}", f"{dst_temp}::{src_temp}"
+        link_ports[temp_src_to_dst] = port_src_to_dst
+        link_ports[temp_dst_to_src] = port_dst_to_src
+        if src == s:
+            links.append(dst)
+        elif dst == s:
+            links.append(src)
+    switch_id = s.split(":")[7]
+    switch_links[switch_id] = links
 
-	else:
-		response.raise_for_status()
+# Calculate path between switches
+def find_switch_route():
+    global path
+    src, dst = int(switch[h2].split(":", 7)[7], 16), int(switch[h1].split(":", 7)[7], 16)
+    for current_path in nx.all_shortest_paths(G, source=src, target=dst):
+        path_key = "::".join(f"{int(node):02x}" for node in current_path)
+        node_list = [f"00:00:00:00:00:00:00:{node:02x}" for node in current_path]
+        path[path_key] = node_list
 
-# Parses JSON Data To Find Switch Connected To H4
-def deviceInformation(data):
-	global switch
-	global deviceMAC
-	global hostPorts
-	switchDPID = ""
-	for j in data.values():
-		for i in j:
-			if(i['ipv4']):
-				ip = i['ipv4'][0].encode('ascii','ignore') # The encode method is unnecessary for strings in Python 3 unless you need to work explicitly with bytes. Strings are already Unicode by default.
-				mac = i['mac'][0].encode('ascii','ignore')
-				deviceMAC[ip] = mac
-				for j in i['attachmentPoint']:
-					for key in j:
-						temp = key.encode('ascii','ignore')
-						if(temp=="switchDPID"):
-							switchDPID = j[key].encode('ascii','ignore')
-							switch[ip] = switchDPID
-						elif(temp=="port"):
-							portNumber = j[key]
-							switchShort = switchDPID.split(":")[7]
-							hostPorts[ip+ "::" + switchShort] = str(portNumber)
+# Calculate link TX cost
+def link_tx(data, key):
+    global cost
+    port = link_ports[key].split("::")[0]
+    for i in data:
+        if i['port'] == port:
+            cost += int(i['bits-per-second-tx'])
 
-# Finding Switch Links Of Common Switch Of H3, H4
+# Compute link cost across a path
+def get_link_cost():
+    global port_key, cost
+    for key in path:
+        src_short_id = switch[h2].split(":")[7]
+        mid = path[key][1].split(":")[7]
+        for link in path[key]:
+            temp = link.split(":")[7]
+            if src_short_id != temp:
+                port_key = f"{src_short_id}::{temp}"
+                stats = f"http://localhost:8080/wm/statistics/bandwidth/{switch[h2]}/0/json"
+                get_response(stats, "linkTX")
+                src_short_id = temp
+        port_key = f"{switch[h2].split(':')[7]}::{mid}::{switch[h1].split(':')[7]}"
+        final_link_tx[port_key] = cost
+        cost = 0
 
-def findSwitchLinks(data,s):
-	global switchLinks
-	global linkPorts
-	global G
+# Execute a system command
+def system_command(cmd):
+    process = Popen(cmd, stdout=PIPE, stderr=PIPE, shell=True)
+    stdout, _ = process.communicate()
+    print("\n***", stdout.decode(), "\n")
 
-	links=[]
-	for i in data:
-		src = i['src-switch'].encode('ascii','ignore')
-		dst = i['dst-switch'].encode('ascii','ignore')
+# Push a flow rule to a switch
+def flow_rule(node, flow_count, in_port, out_port, flow_url):
+    flow_data = {
+        'switch': f"00:00:00:00:00:00:00:{node}",
+        'name': f"flow{flow_count}",
+        'cookie': "0",
+        'priority': "32768",
+        'in_port': in_port,
+        'eth_type': "0x0800",
+        'ipv4_src': h2,
+        'ipv4_dst': h1,
+        'eth_src': device_mac[h2],
+        'eth_dst': device_mac[h1],
+        'active': "true",
+        'actions': f"output={out_port}"
+    }
+    cmd = f"curl -X POST -d '{json.dumps(flow_data)}' {flow_url}"
+    system_command(cmd)
 
-		srcPort = str(i['src-port'])
-		dstPort = str(i['dst-port'])
+# Add flows based on computed path and link costs
+def add_flow():
+    print("TEAM 10")
+    flow_count = 1
+    static_flow_url = "http://127.0.0.1:8080/wm/staticflowpusher/json"
+    shortest_path = min(final_link_tx, key=final_link_tx.get)
+    print("\n\nShortest Path:", shortest_path)
+    current_node = shortest_path.split("::", 2)[0]
+    next_node = shortest_path.split("::")[1]
+    port = link_ports[f"{current_node}::{next_node}"]
+    out_port = port.split("::")[0]
+    in_port = host_ports[f"{h2}::{switch[h2].split(':')[7]}"]
+    flow_rule(current_node, flow_count, in_port, out_port, static_flow_url)
+    flow_count += 2
+    best_path = path[shortest_path]
+    previous_node = current_node
+    for i, current_node in enumerate(best_path):
+        if previous_node == best_path[i].split(":")[7]:
+            continue
+        port = link_ports[f"{best_path[i].split(':')[7]}::{previous_node}"]
+        in_port = port.split("::")[0]
+        if i + 1 < len(best_path):
+            port = link_ports[f"{best_path[i].split(':')[7]}::{best_path[i + 1].split(':')[7]}"]
+            out_port = port.split("::")[0]
+        else:
+            out_port = str(host_ports[f"{h1}::{switch[h1].split(':')[7]}"])
+        flow_rule(best_path[i].split(":")[7], flow_count, str(in_port), str(out_port), static_flow_url)
+        flow_count += 2
+        previous_node = best_path[i].split(":")[7]
 
-		srcTemp = src.split(":")[7]
-		dstTemp = dst.split(":")[7]
+# Perform load balancing across links
+def load_balance():
+    link_url = "http://localhost:8080/wm/topology/links/json"
+    get_response(link_url, "findSwitchLinks")
+    find_switch_route()
+    get_link_cost()
+    add_flow()
 
-		G.add_edge(int(srcTemp,16), int(dstTemp,16))
+# Initialize and get user input for hosts
+global h1, h2, h3
+h1, h2, h3 = "", "", ""
 
-		tempSrcToDst = srcTemp + "::" + dstTemp
-		tempDstToSrc = dstTemp + "::" + srcTemp
-
-		portSrcToDst = str(srcPort) + "::" + str(dstPort)
-		portDstToSrc = str(dstPort) + "::" + str(srcPort)
-
-		linkPorts[tempSrcToDst] = portSrcToDst
-		linkPorts[tempDstToSrc] = portDstToSrc
-
-		if (src==s):
-			links.append(dst)
-		elif (dst==s):
-			links.append(src)
-		else:
-			continue
-
-	switchID = s.split(":")[7]
-	switchLinks[switchID]=links
-
-# Finds The Path To A Switch
-
-def findSwitchRoute():
-	pathKey = ""
-	nodeList = []
-	src = int(switch[h2].split(":",7)[7],16)
-	dst = int(switch[h1].split(":",7)[7],16)
-	print (src)
-	print (dst)
-	for currentPath in nx.all_shortest_paths(G, source=src, target=dst, weight=None):
-		for node in currentPath:
-
-			tmp = ""
-			if node < 17:
-				pathKey = pathKey + "0" + str(hex(node)).split("x",1)[1] + "::"
-				tmp = "00:00:00:00:00:00:00:0" + str(hex(node)).split("x",1)[1]
-			else:
-				pathKey = pathKey + str(hex(node)).split("x",1)[1] + "::"
-				tmp = "00:00:00:00:00:00:00:" + str(hex(node)).split("x",1)[1]
-			nodeList.append(tmp)
-
-		pathKey=pathKey.strip("::")
-		path[pathKey] = nodeList
-		pathKey = ""
-		nodeList = []
-
-	print (path)
-
-# Computes Link TX
-
-def linkTX(data,key):
-	global cost
-	port = linkPorts[key]
-	port = port.split("::")[0]
-	for i in data:
-		if i['port']==port:
-			cost = cost + (int)(i['bits-per-second-tx'])
-
-
-# Method To Compute Link Cost
-
-def getLinkCost():
-	global portKey
-	global cost
-
-	for key in path:
-		start = switch[h2]
-		src = switch[h2]
-		srcShortID = src.split(":")[7]
-		mid = path[key][1].split(":")[7]
-		for link in path[key]:
-			temp = link.split(":")[7]
-
-			if srcShortID==temp:
-				continue
-			else:
-				portKey = srcShortID + "::" + temp
-				stats = "http://localhost:8080/wm/statistics/bandwidth/" + src + "/0/json"
-				getResponse(stats,"linkTX")
-				srcShortID = temp
-				src = link
-		portKey = start.split(":")[7] + "::" + mid + "::" + switch[h1].split(":")[7]
-		finalLinkTX[portKey] = cost
-		cost = 0
-		portKey = ""
-
-def systemCommand(cmd):
-	terminalProcess = Popen(cmd, stdout=PIPE, stderr=PIPE, shell=True)
-	terminalOutput, stderr = terminalProcess.communicate()
-	print ("\n***", terminalOutput, "\n")
-
-def flowRule(currentNode, flowCount, inPort, outPort, staticFlowURL):
-	flow = {
-		'switch':"00:00:00:00:00:00:00:" + currentNode,
-	    "name":"flow" + str(flowCount),
-	    "cookie":"0",
-	    "priority":"32768",
-	    "in_port":inPort,
-		"eth_type": "0x0800",
-		"ipv4_src": h2,
-		"ipv4_dst": h1,
-		"eth_src": deviceMAC[h2],
-		"eth_dst": deviceMAC[h1],
-	    "active":"true",
-	    "actions":"output=" + outPort
-	}
-
-	jsonData = json.dumps(flow)
-
-	cmd = "curl -X POST -d \'" + jsonData + "\' " + staticFlowURL
-
-	systemCommand(cmd)
-
-	flowCount = flowCount + 1
-
-	flow = {
-		'switch':"00:00:00:00:00:00:00:" + currentNode,
-	    "name":"flow" + str(flowCount),
-	    "cookie":"0",
-	    "priority":"32768",
-	    "in_port":outPort,
-		"eth_type": "0x0800",
-		"ipv4_src": h1,
-		"ipv4_dst": h2,
-		"eth_src": deviceMAC[h1],
-		"eth_dst": deviceMAC[h2],
-	    "active":"true",
-	    "actions":"output=" + inPort
-	}
-
-	jsonData = json.dumps(flow)
-
-	cmd = "curl -X POST -d \'" + jsonData + "\' " + staticFlowURL
-
-	systemCommand(cmd)
-
-def addFlow():
-	print ("TEAM 10")
-
-	# Deleting Flow
-	#cmd = "curl -X DELETE -d \'{\"name\":\"flow1\"}\' http://127.0.0.1:8080/wm/staticflowpusher/json"
-	#systemCommand(cmd)
-
-	#cmd = "curl -X DELETE -d \'{\"name\":\"flow2\"}\' http://127.0.0.1:8080/wm/staticflowpusher/json"
-	#systemCommand(cmd)
-
-	flowCount = 1
-	staticFlowURL = "http://127.0.0.1:8080/wm/staticflowpusher/json"
-
-	shortestPath = min(finalLinkTX, key=finalLinkTX.get)
-	print ("\n\nShortest Path: ",shortestPath)
-
-
-	currentNode = shortestPath.split("::",2)[0]
-	nextNode = shortestPath.split("::")[1]
-
-	# Port Computation
-
-	port = linkPorts[currentNode+"::"+nextNode]
-	outPort = port.split("::")[0]
-	inPort = hostPorts[h2+"::"+switch[h2].split(":")[7]]
-
-	flowRule(currentNode,flowCount,inPort,outPort,staticFlowURL)
-
-	flowCount = flowCount + 2
-
-
-	bestPath = path[shortestPath]
-	previousNode = currentNode
-
-	for currentNode in range(0,len(bestPath)):
-		if previousNode == bestPath[currentNode].split(":")[7]:
-			continue
-		else:
-			port = linkPorts[bestPath[currentNode].split(":")[7]+"::"+previousNode]
-			inPort = port.split("::")[0]
-			outPort = ""
-			if(currentNode+1<len(bestPath) and bestPath[currentNode]==bestPath[currentNode+1]):
-				currentNode = currentNode + 1
-				continue
-			elif(currentNode+1<len(bestPath)):
-				port = linkPorts[bestPath[currentNode].split(":")[7]+"::"+bestPath[currentNode+1].split(":")[7]]
-				outPort = port.split("::")[0]
-			elif(bestPath[currentNode]==bestPath[-1]):
-				outPort = str(hostPorts[h1+"::"+switch[h1].split(":")[7]])
-
-			flowRule(bestPath[currentNode].split(":")[7],flowCount,str(inPort),str(outPort),staticFlowURL)
-			flowCount = flowCount + 2
-			previousNode = bestPath[currentNode].split(":")[7]
-
-# Method To Perform Load Balancing
-def loadbalance():
-	linkURL = "http://localhost:8080/wm/topology/links/json"
-	getResponse(linkURL,"findSwitchLinks")
-
-	findSwitchRoute()
-	getLinkCost()
-	addFlow()
-
-# Main
-
-# Stores H1 and H2 from user
-global h1,h2,h3
-
-h1 = ""
-h2 = ""
-
-print ("Enter Host 1")
-h1 = int(input())
-print ("\nEnter Host 2")
-h2 = int(input())
-print ("\nEnter Host 3 (H2's Neighbour)")
-h3 = int(input())
-
-h1 = "10.0.0." + str(h1)
-h2 = "10.0.0." + str(h2)
-h3 = "10.0.0." + str(h3)
-
+print("Enter Host 1:")
+h1 = f"10.0.0.{input().strip()}"
+print("Enter Host 2:")
+h2 = f"10.0.0.{input().strip()}"
+print("Enter Host 3 (H2's Neighbor):")
+h3 = f"10.0.0.{input().strip()}"
 
 while True:
+    try:
+        # Initialize required dictionaries and variables
+        switch, device_mac, host_ports, path, switch_links, link_ports, final_link_tx = {}, {}, {}, {}, {}, {}, {}
+        port_key, cost = "", 0
+        G = nx.Graph()
+        requests.put("http://localhost:8080/wm/statistics/config/enable/json")
+        get_response("http://localhost:8080/wm/device/", "deviceInfo")
+        load_balance()
 
-	# Stores Info About H3 And H4's Switch
-	switch = {}
+        # Print results
+        print("\n\n############ RESULT ############\n\n")
+        print("Switch H4:", switch[h3], "\tSwitch H3:", switch[h2])
+        print("\n\nSwitch H1:", switch[h1])
+        print("\nIP & MAC\n\n", device_mac)
+        print("\nHost::Switch Ports\n\n", host_ports)
+        print("\nLink Ports (SRC::DST - SRC PORT::DST PORT)\n\n", link_ports)
+        print("\nPaths (SRC TO DST)\n\n", path)
+        print("\nFinal Link Cost (First To Second Switch)\n\n", final_link_tx)
+        print("\n\n#######################################\n\n")
 
-	# Mac of H3 And H4
-	deviceMAC = {}
-
-	# Stores Host Switch Ports
-	hostPorts = {}
-
-	# Stores Switch To Switch Path
-	path = {}
-
-	# Switch Links
-
-	switchLinks = {}
-
-	# Stores Link Ports
-	linkPorts = {}
-
-	# Stores Final Link Rates
-	finalLinkTX = {}
-
-	# Store Port Key For Finding Link Rates
-	portKey = ""
-
-	# Stores Link Cost
-	cost = 0
-	# Graph
-	G = nx.Graph()
-
-	try:
-
-		# Enables Statistics Like B/W, etc
-		enableStats = "http://localhost:8080/wm/statistics/config/enable/json"
-		requests.put(enableStats)
-
-		# Device Info (Switch To Which The Device Is Connected & The MAC Address Of Each Device)
-		deviceInfo = "http://localhost:8080/wm/device/"
-		getResponse(deviceInfo,"deviceInfo")
-
-		# Load Balancing
-
-		loadbalance()
-
-		# -------------- PRINT --------------
-
-		print ("\n\n############ RESULT ############\n\n")
-
-		# Print Switch To Which H4 is Connected
-		print ("Switch H4: ",switch[h3], "\tSwitchH3: ", switch[h2])
-
-		print ("\n\nSwitch H1: ", switch[h1])
-
-		# IP & MAC
-		print ("\nIP & MAC\n\n", deviceMAC)
-
-		# Host Switch Ports
-		print ("\nHost::Switch Ports\n\n", hostPorts)
-
-		# Link Ports
-		print ("\nLink Ports (SRC::DST - SRC PORT::DST PORT)\n\n", linkPorts)
-
-		# Alternate Paths
-		print ("\nPaths (SRC TO DST)\n\n",path)
-
-		# Final Link Cost
-		print ("\nFinal Link Cost (First To Second Switch)\n\n",finalLinkTX)
-
-		print ("\n\n#######################################\n\n")
-
-		time.sleep(60)
-
-	except KeyboardInterrupt:
-		break
-		exit()
+        time.sleep(60)
+    except KeyboardInterrupt:
+        break
