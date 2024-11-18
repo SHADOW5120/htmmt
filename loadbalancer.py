@@ -63,6 +63,8 @@ def find_switch_links(data, s):
 def find_switch_route():
     global path
     src, dst = int(switch[h2].split(":", 7)[7], 16), int(switch[h1].split(":", 7)[7], 16)
+    print(src)
+    print(dst)
     for current_path in nx.all_shortest_paths(G, source=src, target=dst):
         path_key = "::".join(f"{int(node):02x}" for node in current_path)
         node_list = [f"00:00:00:00:00:00:00:{node:02x}" for node in current_path]
@@ -86,7 +88,8 @@ def get_link_cost():
             temp = link.split(":")[7]
             if src_short_id != temp:
                 port_key = f"{src_short_id}::{temp}"
-                stats = f"http://localhost:8080/wm/statistics/bandwidth/{switch[h2]}/0/json"
+                port = port_key.split('::')[0]
+                stats = f"http://localhost:8080/wm/statistics/bandwidth/{switch[h2]}/{port}/json"
                 get_response(stats, "linkTX")
                 src_short_id = temp
         port_key = f"{switch[h2].split(':')[7]}::{mid}::{switch[h1].split(':')[7]}"
@@ -101,6 +104,24 @@ def system_command(cmd):
 
 # Push a flow rule to a switch
 def flow_rule(node, flow_count, in_port, out_port, flow_url):
+    flow_data = {
+        'switch': f"00:00:00:00:00:00:00:{node}",
+        'name': f"flow{flow_count}",
+        'cookie': "0",
+        'priority': "32768",
+        'in_port': in_port,
+        'eth_type': "0x0800",
+        'ipv4_src': h2,
+        'ipv4_dst': h1,
+        'eth_src': device_mac[h2],
+        'eth_dst': device_mac[h1],
+        'active': "true",
+        'actions': f"output={out_port}"
+    }
+    cmd = f"curl -X POST -d '{json.dumps(flow_data)}' {flow_url}"
+    system_command(cmd)
+
+    flow_count = flow_count + 1
     flow_data = {
         'switch': f"00:00:00:00:00:00:00:{node}",
         'name': f"flow{flow_count}",
