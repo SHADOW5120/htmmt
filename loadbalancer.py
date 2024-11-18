@@ -89,7 +89,7 @@ def get_link_cost():
             if src_short_id != temp:
                 port_key = f"{src_short_id}::{temp}"
                 port = port_key.split('::')[0]
-                stats = f"http://localhost:8080/wm/statistics/bandwidth/{switch[h2]}/{port}/json"
+                stats = f"http://localhost:8080/wm/statistics/bandwidth/{switch[h2]}/{port}/json" # port có thể là 00 thay vì lấy port của port_key
                 get_response(stats, "linkTX")
                 src_short_id = temp
         port_key = f"{switch[h2].split(':')[7]}::{mid}::{switch[h1].split(':')[7]}"
@@ -127,14 +127,14 @@ def flow_rule(node, flow_count, in_port, out_port, flow_url):
         'name': f"flow{flow_count}",
         'cookie': "0",
         'priority': "32768",
-        'in_port': in_port,
+        'in_port': out_port,
         'eth_type': "0x0800",
-        'ipv4_src': h2,
-        'ipv4_dst': h1,
-        'eth_src': device_mac[h2],
-        'eth_dst': device_mac[h1],
+        'ipv4_src': h1,
+        'ipv4_dst': h2,
+        'eth_src': device_mac[h1],
+        'eth_dst': device_mac[h2],
         'active': "true",
-        'actions': f"output={out_port}"
+        'actions': f"output={in_port}"
     }
     cmd = f"curl -X POST -d '{json.dumps(flow_data)}' {flow_url}"
     system_command(cmd)
