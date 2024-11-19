@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 from mininet.node import CPULimitedHost, Host, Node
 from mininet.node import OVSKernelSwitch
@@ -13,7 +13,7 @@ class fatTreeTopo(Topo):
 
         Topo.__init__(self)
 
-        #Add hosts
+        # Thêm các hosts
         h7 = self.addHost('h7', cls=Host, ip='10.0.0.7', defaultRoute=None)
         h8 = self.addHost('h8', cls=Host, ip='10.0.0.8', defaultRoute=None)
         h1 = self.addHost('h1', cls=Host, ip='10.0.0.1', defaultRoute=None)
@@ -23,7 +23,7 @@ class fatTreeTopo(Topo):
         h5 = self.addHost('h5', cls=Host, ip='10.0.0.5', defaultRoute=None)
         h6 = self.addHost('h6', cls=Host, ip='10.0.0.6', defaultRoute=None)
 
-        #Add switches
+        # Thêm các switch
         s10 = self.addSwitch('s10', cls=OVSKernelSwitch)
         s3 = self.addSwitch('s3', cls=OVSKernelSwitch)
         s17 = self.addSwitch('s17', cls=OVSKernelSwitch)
@@ -35,7 +35,7 @@ class fatTreeTopo(Topo):
         s22 = self.addSwitch('s22', cls=OVSKernelSwitch)
         s2 = self.addSwitch('s2', cls=OVSKernelSwitch)
 
-        #Add links
+        # Thêm links
         self.addLink(h1, s1)
         self.addLink(h2, s1)
         self.addLink(h3, s2)

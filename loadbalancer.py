@@ -6,8 +6,10 @@ import networkx as nx
 from subprocess import Popen, PIPE
 import time
 
-# Function to make REST API call and process JSON response based on the choice
+# Hàm thực hiện gọi REST API và xử lý phản hồi JSON dựa trên lựa chọn
 def get_response(url, choice):
+    print("Link API " + choice)
+    print(url)
     response = requests.get(url)
     if response.ok:
         data = response.json()
@@ -20,7 +22,7 @@ def get_response(url, choice):
     else:
         response.raise_for_status()
 
-# Parse JSON data to find switch connected to a specific device (e.g., H4)
+# Phân tích dữ liệu JSON để tìm switch kết nối với một thiết bị cụ thể (ví dụ: H4)
 def device_information(data):
     global switch, device_mac, host_ports
     switch_dpid = ""
@@ -39,7 +41,7 @@ def device_information(data):
                         switch_short = switch_dpid.split(":")[7]
                         host_ports[f"{ip}::{switch_short}"] = str(port_number)
 
-# Find links for a specific switch and update graph for path computation
+# Tìm các liên kết cho một switch cụ thể và cập nhật đồ thị để tính toán đường dẫn
 def find_switch_links(data, s):
     global switch_links, link_ports, G
     links = []
@@ -59,7 +61,7 @@ def find_switch_links(data, s):
     switch_id = s.split(":")[7]
     switch_links[switch_id] = links
 
-# Calculate path between switches
+# Tính toán đường đi giữa các switch
 def find_switch_route():
     global path
     src, dst = int(switch[h2].split(":", 7)[7], 16), int(switch[h1].split(":", 7)[7], 16)
@@ -70,7 +72,7 @@ def find_switch_route():
         node_list = [f"00:00:00:00:00:00:00:{node:02x}" for node in current_path]
         path[path_key] = node_list
 
-# Calculate link TX cost
+# Tính toán chi phí liên kết TX (Transmission)
 def link_tx(data, key):
     global cost
     port = link_ports[key].split("::")[0]
@@ -78,7 +80,7 @@ def link_tx(data, key):
         if i['port'] == port:
             cost += int(i['bits-per-second-tx'])
 
-# Compute link cost across a path
+# Tính toán chi phí liên kết trên một đường đi
 def get_link_cost():
     global port_key, cost
     for key in path:
@@ -88,21 +90,21 @@ def get_link_cost():
             temp = link.split(":")[7]
             if src_short_id != temp:
                 port_key = f"{src_short_id}::{temp}"
-                port = port_key.split('::')[0]
-                stats = f"http://localhost:8080/wm/statistics/bandwidth/{switch[h2]}/{port}/json" # port có thể là 00 thay vì lấy port của port_key
+                port = link_ports[port_key].split("::")[0]
+                stats = f"http://localhost:8080/wm/statistics/bandwidth/{src_short_id}/{port}/json"
                 get_response(stats, "linkTX")
                 src_short_id = temp
         port_key = f"{switch[h2].split(':')[7]}::{mid}::{switch[h1].split(':')[7]}"
         final_link_tx[port_key] = cost
         cost = 0
 
-# Execute a system command
+# Thực thi một lệnh hệ thống
 def system_command(cmd):
     process = Popen(cmd, stdout=PIPE, stderr=PIPE, shell=True)
     stdout, _ = process.communicate()
     print("\n***", stdout.decode(), "\n")
 
-# Push a flow rule to a switch
+# Đẩy một quy tắc dòng chảy (flow rule) vào một switch
 def flow_rule(node, flow_count, in_port, out_port, flow_url):
     flow_data = {
         'switch': f"00:00:00:00:00:00:00:{node}",
@@ -121,7 +123,7 @@ def flow_rule(node, flow_count, in_port, out_port, flow_url):
     cmd = f"curl -X POST -d '{json.dumps(flow_data)}' {flow_url}"
     system_command(cmd)
 
-    flow_count = flow_count + 1
+    flow_count += 1
     flow_data = {
         'switch': f"00:00:00:00:00:00:00:{node}",
         'name': f"flow{flow_count}",
@@ -139,9 +141,9 @@ def flow_rule(node, flow_count, in_port, out_port, flow_url):
     cmd = f"curl -X POST -d '{json.dumps(flow_data)}' {flow_url}"
     system_command(cmd)
 
-# Add flows based on computed path and link costs
+# Thêm các dòng chảy (flows) dựa trên đường đi đã tính toán và chi phí liên kế
 def add_flow():
-    print("TEAM 10")
+    print("----------TEAM 10----------")
     flow_count = 1
     static_flow_url = "http://127.0.0.1:8080/wm/staticflowpusher/json"
     shortest_path = min(final_link_tx, key=final_link_tx.get)
@@ -169,7 +171,7 @@ def add_flow():
         flow_count += 2
         previous_node = best_path[i].split(":")[7]
 
-# Perform load balancing across links
+# Thực hiện cân bằng tải trên các liên kết
 def load_balance():
     link_url = "http://localhost:8080/wm/topology/links/json"
     get_response(link_url, "findSwitchLinks")
@@ -177,7 +179,7 @@ def load_balance():
     get_link_cost()
     add_flow()
 
-# Initialize and get user input for hosts
+# Khởi tạo và nhận đầu vào từ người dùng cho các máy chủ (hosts)
 global h1, h2, h3
 h1, h2, h3 = "", "", ""
 
@@ -190,7 +192,7 @@ h3 = f"10.0.0.{input().strip()}"
 
 while True:
     try:
-        # Initialize required dictionaries and variables
+        # Khởi tạo các biến cần thiết
         switch, device_mac, host_ports, path, switch_links, link_ports, final_link_tx = {}, {}, {}, {}, {}, {}, {}
         port_key, cost = "", 0
         G = nx.Graph()
@@ -198,7 +200,7 @@ while True:
         get_response("http://localhost:8080/wm/device/", "deviceInfo")
         load_balance()
 
-        # Print results
+        # In kết quả
         print("\n\n############ RESULT ############\n\n")
         print("Switch H4:", switch[h3], "\tSwitch H3:", switch[h2])
         print("\n\nSwitch H1:", switch[h1])
