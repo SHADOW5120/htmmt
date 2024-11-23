@@ -48,9 +48,13 @@ def update_server_connections():
         else:
             print(f"Failed to fetch flows for switch {switch_id}: {response.status_code}")
 
-# Hàm chọn máy chủ có ít kết nối nhất
-def least_connection():
-    selected_server = min(servers, key=servers.get)
+# Hàm chọn máy chủ có ít kết nối nhất từ các host còn lại
+def least_connection(src_ip):
+    # Tạo danh sách các máy chủ (host khác với src_ip)
+    remaining_servers = {ip: conn for ip, conn in servers.items() if ip != src_ip}
+    
+    # Chọn máy chủ có ít kết nối nhất
+    selected_server = min(remaining_servers, key=remaining_servers.get)
     return selected_server
 
 # Đẩy flow rule đến switch
@@ -77,7 +81,7 @@ def push_flow_rule(src_ip, dst_ip, src_mac, dst_mac, in_port, out_port, switch):
 
 # Thực hiện cân bằng tải Least Connection
 def load_balance_least_connection(src_ip):
-    selected_server = least_connection()
+    selected_server = least_connection(src_ip)
     server_data = host_to_server[selected_server]
 
     # Thông tin về switch, cổng kết nối host -> switch và switch -> server
@@ -107,6 +111,6 @@ try:
             continue
 
         load_balance_least_connection(src_ip)
-        time.sleep(30)  # Chu kỳ thực hiện (giả lập)
+        time.sleep(20)  # Chu kỳ thực hiện (giả lập)
 except KeyboardInterrupt:
     print("\nExiting load balancer...")
