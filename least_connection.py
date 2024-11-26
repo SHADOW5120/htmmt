@@ -8,7 +8,7 @@ import time
 device_url = "http://localhost:8080/wm/device/"
 link_url = "http://localhost:8080/wm/topology/links/json"
 flow_url = "http://127.0.0.1:8080/wm/staticflowpusher/json"
-statistics_url = "http://localhost:8080/wm/statistics/flow/{}/json"
+statistics_url = "http://localhost:8080/wm/staticflowpusher/list/all/json"
 
 # Danh sách máy chủ và trạng thái kết nối
 servers = {}  # Mỗi máy chủ sẽ lưu số kết nối hiện tại
@@ -37,21 +37,30 @@ def get_device_info():
 def update_server_connections():
     for server_ip, server_data in host_to_server.items():
         switch_id = server_data['switch']
-        response = requests.get(statistics_url.format(switch_id))
+        print(f"Processing server: {server_ip}")
+        response = requests.get(statistics_url)
         if response.ok:
             flows = response.json()
             active_flows = 0
-            for flow_entry in flows[0]['flows']:
-                if flow_entry['match'].get('ipv4_dst') == server_ip:
-                    active_flows += 1
+            for flow_entry in flows.values():
+                print("Processing flow entry")
+
+                for flow_details in flow_entry:
+                    for flow_number, flow_data in flow_details.items():
+                        print(f"Flow number: {flow_number}")
+                        
+                        if flow_data['match'].get('ipv4_dst') == server_ip:
+                            active_flows += 1
+            
             servers[server_ip] = active_flows
+            print(f"Active flows for {server_ip}: {active_flows}")
         else:
             print(f"Failed to fetch flows for switch {switch_id}: {response.status_code}")
 
 # Hàm chọn máy chủ có ít kết nối nhất từ các host còn lại
 def least_connection(src_ip):
     # Tạo danh sách các máy chủ (host khác với src_ip)
-    remaining_servers = {ip: conn for ip, conn in servers.items() if ip != src_ip}
+    remaining_servers = {ip: conn for ip, conn in servers.items() if ip == "10.0.0.1" or ip == "10.0.0.3" or ip == "10.0.0.7"}
     
     # Chọn máy chủ có ít kết nối nhất
     selected_server = min(remaining_servers, key=remaining_servers.get)
